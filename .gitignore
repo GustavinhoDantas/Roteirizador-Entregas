@@ -1,0 +1,13 @@
+venv/
+build/
+dist/
+PDFs/
+Roteirizador/
+
+*.exe
+*.zip
+*.pkg
+*.pyz
+
+__pycache__/
+*.pyc

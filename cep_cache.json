@@ -1,0 +1,37 @@
+{
+  "13347402": {
+    "logradouro": "Rua Alberto Guizo",
+    "cidade": "Indaiatuba",
+    "uf": "SP",
+    "lat": -23.1319569,
+    "lon": -47.2235192
+  },
+  "13330070": {
+    "logradouro": "Rua Quinze de Novembro",
+    "cidade": "Indaiatuba",
+    "uf": "SP",
+    "lat": -23.0765317,
+    "lon": -47.2095261
+  },
+  "13331742": {
+    "logradouro": "Avenida Fábio Ferraz Bicudo",
+    "cidade": "Indaiatuba",
+    "uf": "SP",
+    "lat": -23.0873536,
+    "lon": -47.2256951
+  },
+  "13347404": {
+    "logradouro": "Rua Antonia Martins Luiz",
+    "cidade": "Indaiatuba",
+    "uf": "SP",
+    "lat": -23.1326441,
+    "lon": -47.2243275
+  },
+  "13501080": {
+    "logradouro": "Rua 7 CJ",
+    "cidade": "Rio Claro",
+    "uf": "SP",
+    "lat": -22.4251863,
+    "lon": -47.5577518
+  }
+}
