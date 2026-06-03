@@ -16,8 +16,7 @@
 #  IMPORTS
 # ─────────────────────────────────────────────────────────────
 
-import os, sys, json, math, time, threading, re
-from datetime import datetime
+import os, sys, json, math, time, threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import requests
@@ -46,15 +45,6 @@ ARQUIVO_EXCEL = ""
 CEP_ORIGEM           = "13347-402"   # <- CEP da sua empresa
 VELOCIDADE_MEDIA_KMH = 35
 BUFFER_ENTRE_PARADAS = 10            # minutos de folga entre paradas
-
-# Tempo padrão de serviço por tipo (usado quando campo estiver vazio no pedido)
-TEMPO_PADRAO_POR_TIPO = {
-    "manutenção": 60,
-    "manutencao": 60,
-    "entrega":    30,
-    "itens":      30,
-}
-TEMPO_PADRAO_GERAL = 30
 BASE_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
 
 PASTA_PDF = os.path.join(BASE_DIR, "PDFs")
@@ -156,29 +146,27 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def hora_para_minutos(valor):
-    """
-    Aceita: fração decimal do Excel (0.291=07:00), "HH:MM",
-    "HH:MM:SS", pandas Timestamp, datetime.time, int/str.
-    """
+def hora_para_minutos(hora_str):
     try:
-        if valor is None or str(valor).strip() in ("", "nan", "NaT"):
+        valor = str(hora_str).strip()
+
+        # vazio
+        if not valor:
             return 0
-        if hasattr(valor, "hour"):
-            return valor.hour * 60 + valor.minute
-        s = str(valor).strip()
-        try:
-            f = float(s)
-            if 0.0 <= f < 1.0:
-                return round(f * 24 * 60)
-        except ValueError:
-            pass
-        partes = s.split(":")
-        if len(partes) >= 2:
-            return int(partes[0]) * 60 + int(partes[1])
-        return int(s) * 60
+
+        # só hora ("7")
+        if ":" not in valor:
+            return int(valor) * 60
+
+        partes = valor.split(":")
+
+        h = int(partes[0])
+        m = int(partes[1])
+
+        return h * 60 + m
+
     except Exception as e:
-        print(f"AVISO hora_para_minutos({valor!r}): {e}")
+        print("ERRO hora:", hora_str, e)
         return 0
 
 def minutos_para_hora(minutos):
@@ -399,14 +387,10 @@ def calcular_rota(
         h_entrada_min = hora_para_minutos(hor.get("hora_entrada", "08:00"))
         h_saida_min   = hora_para_minutos(hor.get("hora_saida",   "17:00"))
 
-        tempo_est_raw = str(ped.get("tempo_estimado_servico", "")).strip()
         try:
-            tempo_est = int(tempo_est_raw) if tempo_est_raw else 0
+            tempo_est = int(str(ped.get("tempo_estimado_servico", "30")).strip())
         except Exception:
-            tempo_est = 0
-        if tempo_est == 0:
-            tipo_lower = str(ped.get("tipo_servico", "")).strip().lower()
-            tempo_est = TEMPO_PADRAO_POR_TIPO.get(tipo_lower, TEMPO_PADRAO_GERAL)
+            tempo_est = 30
 
         is_retirada_ext = (
             fl_ret in ("sim", "s", "yes", "1", "true") and tipo_ret == "externa"
@@ -545,15 +529,10 @@ def calcular_rota(
         if saida_local_min > jornada_fim_m:
             alertas.append(f"Estoura jornada ({jornada_saida})")
 
-        p["ordem"]                  = i + 1
-        p["hora_chegada"]           = minutos_para_hora(chegada_efetiva)
-        p["hora_saida_local"]       = minutos_para_hora(saida_local_min)
-        p["alertas"]                = " | ".join(alertas)
-        p["tempo_espera_min"]       = max(0, abertura_min - chegada_min)
-        p["tempo_deslocamento_min"] = round(mins_viagem)
-        p["tempo_servico_min"]      = p["tempo_est"]
-        p["km_acumulado"]           = round(
-            sum(r.get("dist_anterior_km", 0) for r in rota[:i+1]), 2)
+        p["ordem"]            = i + 1
+        p["hora_chegada"]     = minutos_para_hora(chegada_efetiva)
+        p["hora_saida_local"] = minutos_para_hora(saida_local_min)
+        p["alertas"]          = " | ".join(alertas)
 
         # Próxima parada parte da saída efetiva deste cliente
         hora_cur_min = saida_local_min
@@ -578,13 +557,11 @@ def calcular_rota(
 CABECALHOS = [
     "pedido_id", "data", "funcionario", "ordem",
     "cliente", "cep", "endereco",
-    "tipo_servico", "nf", "canhoto", "descricao",
+    "tipo_servico", "nf", "descricao",
     "prioridade", "retirada_externa",
     "janela_entrada", "janela_saida",
     "hora_chegada", "hora_saida_local",
-    "dist_anterior_km", "km_acumulado",
-    "tempo_deslocamento_min", "tempo_espera_min", "tempo_servico_min",
-    "semana", "mes", "alertas",
+    "dist_anterior_km", "alertas",
 ]
 
 
@@ -639,23 +616,16 @@ def salvar_itinerario(rota, data, nome_func):
             cor = "FFFFFF"
 
         fill = PatternFill("solid", fgColor=cor)
-        dt     = pd.to_datetime(data)
-        semana = int(dt.isocalendar().week)
-        mes    = dt.strftime("%Y-%m")
         linha = [
             p["pedido_id"], data, nome_func, p["ordem"],
             p["cliente_nome"], p["cep"],
             f"{p['endereco']}, {p['numero']}",
-            p["tipo"], p["nf"], p.get("canhoto", ""), p["descricao"],
+            p["tipo"], p["nf"], p["descricao"],
             p["prioridade"],
             "Sim" if p["retirada_ext"] else "Não",
             p["h_entrada"], p["h_saida"],
             p["hora_chegada"], p["hora_saida_local"],
-            p["dist_anterior_km"], p.get("km_acumulado", 0),
-            p.get("tempo_deslocamento_min", 0),
-            p.get("tempo_espera_min", 0),
-            p.get("tempo_servico_min", 0),
-            semana, mes, p["alertas"],
+            p["dist_anterior_km"], p["alertas"],
         ]
         ws.append(linha)
         row_num = ws.max_row
@@ -670,9 +640,6 @@ def salvar_itinerario(rota, data, nome_func):
     for i, larg in enumerate(larguras, 1):
         ws.column_dimensions[get_column_letter(i)].width = larg
 
-    # Registrar no histórico
-    _salvar_historico(wb, data, nome_func, rota)
-
     try:
         wb.save(ARQUIVO_EXCEL)
         return True, "Salvo com sucesso."
@@ -680,52 +647,6 @@ def salvar_itinerario(rota, data, nome_func):
         return False, "Feche o arquivo Excel e tente novamente."
     except Exception as e:
         return False, str(e)
-
-
-def _salvar_historico(wb, data, nome_func, rota):
-    """Registra cada geração na aba Historico (útil para Power BI)."""
-    if "Historico" not in wb.sheetnames:
-        wh = wb.create_sheet("Historico")
-        cab = ["data_geracao", "data_itinerario", "funcionario",
-               "qtd_paradas", "km_total", "saida_prevista"]
-        wh.append(cab)
-        for col in range(1, len(cab) + 1):
-            c = wh.cell(row=1, column=col)
-            c.font      = Font(bold=True, color="FFFFFF")
-            c.fill      = PatternFill("solid", fgColor="1A1916")
-            c.alignment = Alignment(horizontal="center")
-    else:
-        wh = wb["Historico"]
-    km_total   = round(sum(p.get("dist_anterior_km", 0) for p in rota), 1)
-    saida_prev = rota[-1]["hora_saida_local"] if rota else ""
-    wh.append([
-        datetime.now().strftime("%Y-%m-%d %H:%M"),
-        data, nome_func, len(rota), km_total, saida_prev,
-    ])
-
-
-def marcar_pedido_concluido(pedido_id):
-    """Marca status do pedido como Concluído diretamente no Excel."""
-    try:
-        wb = load_workbook(ARQUIVO_EXCEL)
-        ws = wb["Pedidos"]
-        headers = [str(c.value or "").strip().lower() for c in ws[1]]
-        try:
-            col_id     = headers.index("id") + 1
-            col_status = headers.index("status") + 1
-        except ValueError:
-            return False, "Colunas 'id' ou 'status' não encontradas na aba Pedidos."
-        for row in ws.iter_rows(min_row=2):
-            if str(row[col_id - 1].value or "").strip() == str(pedido_id):
-                row[col_status - 1].value = "Concluído"
-                break
-        wb.save(ARQUIVO_EXCEL)
-        return True, "OK"
-    except PermissionError:
-        return False, "Feche o arquivo Excel e tente novamente."
-    except Exception as e:
-        return False, str(e)
-
 
 #
 #   PARA SALVAR O ITINARARIO EM PDF
@@ -778,13 +699,14 @@ def exportar_pdf(rota, jornada_info, nome_func, data):
         # RESUMO
         # ─────────────────────────────
 
-        dist_total_pdf = sum(p.get("dist_anterior_km", 0) for p in rota)
         resumo = Paragraph(
             (
-                f"<b>Data:</b> {data}  &nbsp;|&nbsp;  "
-                f"<b>Jornada:</b> {jornada_info['entrada']} às {jornada_info['saida']}  &nbsp;|&nbsp;  "
-                f"<b>Saída prevista:</b> {jornada_info['saida_prevista']}  &nbsp;|&nbsp;  "
-                f"<b>Total:</b> {len(rota)} paradas / ~{dist_total_pdf:.0f} km"
+                f"<b>Data:</b> {data}<br/>"
+                f"<b>Jornada:</b> "
+                f"{jornada_info['entrada']} às "
+                # f"{jornada_info['saida']}<br/>"
+                # f"<b>Saída prevista:</b> "
+                # f"{jornada_info['saida_prevista']}"
             ),
             styles["BodyText"]
         )
@@ -1009,25 +931,7 @@ class App(tk.Tk):
             relief="flat", cursor="hand2", padx=14, pady=5,
             command=self._salvar, state="disabled",
         )
-        self.btn_salvar.grid(row=1, column=7, padx=(0, 8))
-
-        tk.Button(
-            frame_botoes, text="↺ Recarregar",
-            font=("Helvetica", 10),
-            bg="#F0EFEA", fg="#444441",
-            activebackground="#E2E0D8",
-            relief="flat", cursor="hand2", padx=12, pady=5,
-            command=self._recarregar,
-        ).grid(row=1, column=8, padx=(0, 8))
-
-        tk.Button(
-            frame_botoes, text="Cancelar",
-            font=("Helvetica", 10),
-            bg="#F0EFEA", fg="#444441",
-            activebackground="#E2E0D8",
-            relief="flat", cursor="hand2", padx=12, pady=5,
-            command=self._cancelar,
-        ).grid(row=1, column=9)
+        self.btn_salvar.grid(row=1, column=7)
 
         # Barra de jornada
         jf = tk.Frame(self, bg="#FFFFFF",
@@ -1058,26 +962,9 @@ class App(tk.Tk):
                                    bg="#F0EFEA", fg="#6B6860", anchor="w")
         self.lbl_status.pack(fill="x", padx=18, pady=(6, 0))
 
-        # Notebook: aba Rota + aba Log
-        self.nb = ttk.Notebook(self)
-        self.nb.pack(fill="both", expand=True, padx=16, pady=(8, 8))
-
-        tab_rota = tk.Frame(self.nb, bg="#F0EFEA")
-        self.nb.add(tab_rota, text="  Rota  ")
-
-        tab_log = tk.Frame(self.nb, bg="#1A1916")
-        self.nb.add(tab_log, text="  Log  ")
-        self.txt_log = tk.Text(
-            tab_log, font=("Courier", 10),
-            bg="#1A1916", fg="#C8C5BC",
-            state="disabled", wrap="word", relief="flat", bd=0,
-        )
-        sb_log_v = ttk.Scrollbar(tab_log, orient="vertical", command=self.txt_log.yview)
-        self.txt_log.configure(yscrollcommand=sb_log_v.set)
-        sb_log_v.pack(side="right", fill="y")
-        self.txt_log.pack(fill="both", expand=True, padx=2, pady=2)
-
-        tf = tab_rota
+        # Tabela
+        tf = tk.Frame(self, bg="#F0EFEA")
+        tf.pack(fill="both", expand=True, padx=16, pady=(8, 8))
 
         cols = ("ordem", "cliente", "tipo", "nf",
                 "janela", "chegada", "saida_local", "dist", "alertas")
@@ -1100,17 +987,10 @@ class App(tk.Tk):
             anc = "center" if col in ("ordem", "chegada", "saida_local", "dist") else "w"
             self.tree.column(col, width=width, anchor=anc)
 
-        self.tree.tag_configure("urgente",   background="#FBEAEA", foreground="#7A1F1F")
-        self.tree.tag_configure("retirada",  background="#EAF3DE", foreground="#27500A")
-        self.tree.tag_configure("alerta",    background="#FAEEDA", foreground="#633806")
-        self.tree.tag_configure("normal",    background="#FFFFFF", foreground="#1A1916")
-        self.tree.tag_configure("concluido", background="#F0F0F0", foreground="#999999")
-
-        # Menu de contexto (botão direito) — marcar como concluído
-        self._ctx = tk.Menu(self, tearoff=0)
-        self._ctx.add_command(label="✓  Marcar como Concluído",
-                              command=self._marcar_concluido_selecionado)
-        self.tree.bind("<Button-3>", self._show_ctx)
+        self.tree.tag_configure("urgente",  background="#FBEAEA", foreground="#7A1F1F")
+        self.tree.tag_configure("retirada", background="#EAF3DE", foreground="#27500A")
+        self.tree.tag_configure("alerta",   background="#FAEEDA", foreground="#633806")
+        self.tree.tag_configure("normal",   background="#FFFFFF", foreground="#1A1916")
 
         sb_v = ttk.Scrollbar(tf, orient="vertical",   command=self.tree.yview)
         sb_h = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
@@ -1213,17 +1093,12 @@ class App(tk.Tk):
         self.lbl_jornada.config(text="Jornada: —")
         self.lbl_pct.config(text="")
         self._set_status("Calculando rota...")
-        self._log(f"\n── Iniciando: {func} | {data} ──")
-
-        def _log_dual(msg):
-            self._set_status(msg)
-            self._log(msg)
 
         def run():
             rota, jornada, erro = calcular_rota(
-                data, func, j_ini, j_fim, almoco_ini, almoco_fim,
+                data, func, j_ini, j_fim,  almoco_ini, almoco_fim,
                 self.clientes, self.horarios, self.pedidos,
-                log_fn=_log_dual,
+                log_fn=self._set_status,
             )
             self.after(0, lambda: self._exibir(rota, jornada, erro, data, func))
 
@@ -1245,7 +1120,7 @@ class App(tk.Tk):
                    "retirada" if p["retirada_ext"] else
                    "alerta"   if p["alertas"] else "normal")
 
-            self.tree.insert("", "end", iid=p["pedido_id"], values=(
+            self.tree.insert("", "end", values=(
                 p["ordem"],
                 ("↩ " if p["retirada_ext"] else "") + p["cliente_nome"],
                 p["tipo"],
@@ -1281,7 +1156,6 @@ class App(tk.Tk):
 
         self.btn_salvar.config(state="normal")
         self._set_status(f"✓ {len(rota)} paradas | ~{dist_total:.0f} km")
-        self._log(f"✓ Rota calculada: {len(rota)} paradas | ~{dist_total:.0f} km")
 
     # ── SALVAR ──────────────────────────────────────────────
 
@@ -1302,7 +1176,13 @@ class App(tk.Tk):
 
         if ok:
             self._set_status("✓ Salvo na aba 'Itinerario'.")
-            self._log(f"✓ Excel salvo: {self._func_atual} | {self._data_atual}")
+            messagebox.showinfo(
+                "Salvo",
+                f"Itinerário de {self._func_atual} ({self._data_atual})\n"
+                "salvo com sucesso na aba 'Itinerario'."
+            )
+            
+            
 
             pdf_ok, pdf_msg = exportar_pdf(
                 self.rota_atual,
@@ -1329,79 +1209,6 @@ class App(tk.Tk):
             messagebox.showerror("Erro ao salvar", msg)
 
         self.btn_salvar.config(state="normal")
-
-    # ── RECARREGAR ──────────────────────────────────────────
-
-    def _recarregar(self):
-        """Relê o Excel sem fechar o programa."""
-        try:
-            data_ant = self.cb_data.get()
-            func_ant = self.cb_func.get()
-            self.clientes, self.horarios, self.pedidos, self.funcionarios = ler_excel()
-            self._popular_datas()
-            if data_ant in list(self.cb_data["values"]):
-                self.cb_data.set(data_ant)
-                self._on_data_change()
-                if func_ant in list(self.cb_func["values"]):
-                    self.cb_func.set(func_ant)
-            self._log("↺ Dados recarregados do Excel com sucesso.")
-            self._set_status("↺ Recarregado.")
-        except Exception as e:
-            messagebox.showerror("Erro ao recarregar", str(e))
-
-    # ── CANCELAR ────────────────────────────────────────────
-
-    def _cancelar(self):
-        """Limpa a rota exibida sem fechar o programa."""
-        self._limpar_tabela()
-        self.rota_atual   = []
-        self.jornada_info = None
-        self.barra.place(relwidth=0)
-        self.lbl_jornada.config(text="Jornada: —")
-        self.lbl_pct.config(text="")
-        self.btn_salvar.config(state="disabled")
-        for s in (self.s_total, self.s_dist, self.s_urgentes, self.s_retirada):
-            s.config(text="—")
-        self._set_status("Cancelado.")
-
-    # ── MARCAR CONCLUÍDO ────────────────────────────────────
-
-    def _show_ctx(self, event):
-        row = self.tree.identify_row(event.y)
-        if row:
-            self.tree.selection_set(row)
-            self._ctx.post(event.x_root, event.y_root)
-
-    def _marcar_concluido_selecionado(self):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        pedido_id = sel[0]
-        nome_cli  = self.tree.item(pedido_id, "values")[1]
-        if not messagebox.askyesno("Confirmar",
-                f"Marcar '{nome_cli}' como Concluído no Excel?"):
-            return
-        ok, msg = marcar_pedido_concluido(pedido_id)
-        if ok:
-            self.tree.item(pedido_id, tags=("concluido",))
-            self._log(f"✓ Concluído: pedido {pedido_id} — {nome_cli}")
-            self._set_status(f"✓ Pedido {pedido_id} marcado como Concluído.")
-        else:
-            messagebox.showerror("Erro", msg)
-
-    # ── LOG ─────────────────────────────────────────────────
-
-    def _log(self, msg):
-        """Adiciona linha com timestamp na aba Log."""
-        ts    = datetime.now().strftime("%H:%M:%S")
-        linha = "[" + ts + "] " + str(msg) + "\n"
-        try:
-            self.txt_log.config(state="normal")
-            self.txt_log.insert("end", linha)
-            self.txt_log.see("end")
-            self.txt_log.config(state="disabled")
-        except Exception:
-            pass
 
     # ── UTILS ───────────────────────────────────────────────
 
